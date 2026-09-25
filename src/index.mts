@@ -534,6 +534,7 @@ export class VoipClient extends EventEmitter {
       from: toBareJid(creator),
       fromDevice,
       callerPn: callerPn || undefined,
+      pushName: String(node.attrs?.notify ?? "") || undefined,
       isVideo: Array.isArray(child.content) && child.content.some((c: any) => c?.tag === "video"),
       isGroup: child.attrs?.type === "group" || !!child.attrs?.["group-jid"],
       offline: !!(node.attrs?.offline ?? child.attrs?.offline),

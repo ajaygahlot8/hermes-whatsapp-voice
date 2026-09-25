@@ -28,12 +28,14 @@ export class LiveVoiceSession extends EventEmitter {
   audioMs = 0
   currentBotTurnId = ''
 
-  constructor({ broker, voice = 'cove', profile = null, note = '', log = () => {} }) {
+  constructor({ broker, voice = 'cove', profile = null, note = '', language = '', persona = 'full', log = () => {} }) {
     super()
     this.broker = broker
     this.voice = voice
     this.profile = profile
     this.note = note
+    this.language = language
+    this.persona = persona
     this.log = log
   }
 
@@ -63,6 +65,8 @@ export class LiveVoiceSession extends EventEmitter {
       voice: this.voice,
       profile: this.profile || null,
       note: this.note,
+      language: this.language,
+      persona: this.persona,
     }, 90_000)
     this.threadId = res.threadId || null
     this.handoff = res.handoff === 'server' ? 'server' : 'client'
@@ -112,7 +116,7 @@ export class LiveVoiceSession extends EventEmitter {
     try {
       await this.broker.request('interrupt', { threadId: this.threadId, turnId }, 8000)
     } catch (err) {
-      if (!/no active turn/i.test(err.message)) this.log(`voice: interrupt failed: ${err.message}`)
+      if (!/no active turn|expected active turn/i.test(err.message)) this.log(`voice: interrupt failed: ${err.message}`)
     }
   }
 

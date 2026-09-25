@@ -33,6 +33,7 @@ const voice = new LiveVoiceSession({
   voice: config.voice,
   profile: config.profile || null,
   note: 'SELF-TEST: this is an automated test of the phone bridge. Keep answers very short.',
+  language: config.language,
   log,
 })
 const chat = new HermesChat({
@@ -51,7 +52,7 @@ voice.on('line', ({ role, text }) => log(`${role === 'user' ? 'CALLER' : 'BOT'}:
 voice.on('delegation', async ({ itemId, text }) => {
   delegations += 1
   log(`DELEGATION: ${text || '(empty)'}`)
-  const res = await chat.ask(`[voice self-test] Begin your reply with 1-2 short spoken sentences, then a line with only --- and any details.\n\nRequest: ${text || spoken}`)
+  const res = await chat.ask(`[voice self-test] Begin your reply with 1-2 short spoken sentences in the language of the request, then a line with only --- and any details.\n\nRequest: ${text || spoken}`)
   results += 1
   log(`CHAT RESULT (${res.sessionId}): ${plainForVoice(res.text).slice(0, 300)}${res.error ? ` ERROR ${res.error}` : ''}`)
   voice.respondDelegation(itemId, `Task result (answer the user with this, briefly and naturally): ${plainForVoice(res.text) || res.error}`)

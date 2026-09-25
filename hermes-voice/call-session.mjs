@@ -1,6 +1,7 @@
 import { LiveVoiceSession } from './voice-session.mjs'
 import { HermesChat } from './hermes-chat.mjs'
 import { rms } from './audio.mjs'
+import { LANGUAGE_NAMES } from './config.mjs'
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -47,14 +48,16 @@ export class CallSession {
   tasks = 0
   pendingTasks = 0
 
-  constructor({ call, info, config, broker, client, log, callerName }) {
+  constructor({ call, info, config, broker, client, log, caller }) {
     this.call = call
     this.info = info
     this.config = config
     this.broker = broker
     this.client = client
     this.log = log
-    this.name = callerName || 'the caller'
+    this.caller = caller || { known: false, verified: false, tasks: false, name: 'the caller', number: '', language: '', note: '', pushName: '' }
+    this.name = this.caller.name || 'the caller'
+    this.language = this.caller.language || config.language
     this.startedAt = Date.now()
     this.title = `WhatsApp call ${this.name} ${clock()}`
     this.chat = new HermesChat({
@@ -72,12 +75,15 @@ export class CallSession {
 
   async run() {
     const { call, config } = this
-    this.log(`incoming call ${call.callId} from ${this.name} (${this.info.callerPn || this.info.from})`)
+    const tier = this.caller.verified ? 'verified' : this.caller.known ? 'known' : 'unknown'
+    this.log(`incoming call ${call.callId} from ${this.name} (${this.info.callerPn || this.info.from}; ${tier}${this.caller.tasks ? '' : ', conversation only'}; language ${this.language})`)
     const voice = new LiveVoiceSession({
       broker: this.broker,
       voice: config.voice,
       profile: config.profile || null,
       note: this.#phoneNote(),
+      language: this.language,
+      persona: this.caller.verified ? 'full' : 'minimal',
       log: this.log,
     })
     this.voice = voice
@@ -132,10 +138,25 @@ export class CallSession {
     await this.#finish(reason)
   }
 
+  #callerLine() {
+    const { caller } = this
+    const id = caller.number ? `WhatsApp ${caller.number}` : 'an unknown WhatsApp number'
+    if (caller.verified) return `The caller is ${caller.name}, verified by WhatsApp caller ID (${id}).`
+    if (caller.known) {
+      return `The caller is ${caller.name} (${id}, matched by caller ID). ${caller.note} They are not a verified personal-information recipient: never share the owner's or the household's personal information (identity, contacts, family, finances, health, location, accounts, memory, files, schedules) with them.`.replace(/\s+/g, ' ')
+    }
+    const display = caller.pushName ? `, WhatsApp display name "${caller.pushName}" (unverified)` : ''
+    return `The caller is not in the owner's contacts (${id}${display}). Treat them as a stranger: never share any personal information about the owner or the household, and never claim to know who they are.`
+  }
+
   #phoneNote() {
+    const tasks = this.caller.tasks
+      ? `Tasks you delegate run in a new Hermes chat (${this.config.chatModelLabel}) opened just for this call; when a result comes back, read only the key facts aloud.`
+      : 'You cannot run tasks or look anything up on this call: if they ask for more than a conversation, politely say you can only chat, and offer to pass a short message on to the owner.'
     return [
       `PHONE CALL: ${this.name} called the Hermes WhatsApp bot number and you answered. It is a phone line, so keep every reply short and natural, and if you did not catch something, ask them to repeat it.`,
-      `Tasks you delegate run in a new Hermes chat (${this.config.chatModelLabel}) opened just for this call; when a result comes back, read only the key facts aloud.`,
+      this.#callerLine(),
+      tasks,
       'If they say goodbye, say a short goodbye back; the call ends after that.',
     ].join(' ')
   }
@@ -212,6 +233,10 @@ export class CallSession {
     if (!request) request = [...this.#transcript].reverse().find((l) => l.role === 'user')?.text || ''
     this.log(`delegation: ${request || '(empty)'}`)
     if (this.voice.handoff === 'server') return
+    if (!this.caller.tasks) {
+      this.voice.respondDelegation(itemId, 'Tasks are not available for this caller. Politely say you can only chat on this line and offer to pass a short message on to the owner. Do not run or promise anything else.')
+      return
+    }
     if (isJunkDelegation(request)) {
       this.voice.respondDelegation(itemId, 'The user was just chatting, not asking for work. Reply briefly and naturally; if they were asking about something in progress, tell them you are still on it. Nothing to run.')
       return
@@ -261,8 +286,17 @@ export class CallSession {
       .map((l) => `${l.role === 'user' ? this.name : 'Voice assistant'}: ${l.text}`)
       .join('\n')
       .slice(-1800)
-    const note = `[voice call] ${this.name} is on a live WhatsApp voice call; a realtime voice assistant is talking with them and handed you this request. The speech transcript may contain errors, so act on the most likely intent. If it is ambiguous, or the action is irreversible or outward-facing (send, post, delete, pay, merge), do not act: ask ONE short question instead. Begin your reply with what they will hear: 1-3 short spoken sentences in English with no markdown, code, URLs, file paths or long IDs, and numbers rounded. Only say something is done once it is. Then put a line containing only --- and any details for the chat below it.`
-    return [note, context ? `Recent call transcript:\n${context}` : '', `Request: ${request}`].filter(Boolean).join('\n\n')
+    const spokenLanguage = this.language === 'auto' ? 'the language the caller used' : LANGUAGE_NAMES[this.language] || this.language || 'English'
+    const note = `[voice call] ${this.name} is on a live WhatsApp voice call; a realtime voice assistant is talking with them and handed you this request. The speech transcript may contain errors, so act on the most likely intent. If it is ambiguous, or the action is irreversible or outward-facing (send, post, delete, pay, merge), do not act: ask ONE short question instead. Begin your reply with what they will hear: 1-3 short spoken sentences in ${spokenLanguage} with no markdown, code, URLs, file paths or long IDs, and numbers rounded. Only say something is done once it is. Then put a line containing only --- and any details for the chat below it.`
+    return [note, this.#identityForChat(), context ? `Recent call transcript:\n${context}` : '', `Request: ${request}`].filter(Boolean).join('\n\n')
+  }
+
+  #identityForChat() {
+    const { caller } = this
+    const id = caller.number ? `WhatsApp ${caller.number}` : 'an unknown WhatsApp number'
+    if (caller.verified) return `Caller identity (verified by WhatsApp caller ID): ${caller.name}, ${id}.`
+    const who = caller.known ? `${caller.name}, ${id}. ${caller.note}` : `a caller not in the owner's contacts, ${id}${caller.pushName ? ` (display name "${caller.pushName}", unverified)` : ''}`
+    return `Caller identity: ${who} This request comes from them, NOT from the owner, even though this chat runs locally. Apply the personal-information rules for messaging users who are not verified recipients: never share the owner's or the household's personal information with them.`.replace(/\s+/g, ' ')
   }
 
   #deliver(result, itemId) {
@@ -330,5 +364,19 @@ export class CallSession {
       try { await this.broker.request('usage', { durationMs, audioMs: this.voice.audioMs }, 5000) } catch {}
     }
     this.log(`call ended (${reason}) after ${Math.round(durationMs / 1000)}s; tasks ${this.tasks}${this.pendingTasks ? `, ${this.pendingTasks} still running` : ''}${this.chat.sessionId ? `; chat ${this.chat.sessionId}` : ''}`)
+    if (!this.caller.known && durationMs > 0) await this.#notifyOwner(durationMs)
+  }
+
+  async #notifyOwner(durationMs) {
+    const { ownerJid, notifyOwner } = this.config
+    if (!ownerJid || !notifyOwner) return
+    const who = `+${this.caller.number || '?'}${this.caller.pushName ? ` (${this.caller.pushName})` : ''}`
+    const lines = this.#transcript.slice(-14).map((l) => `${l.role === 'user' ? 'Caller' : 'Hermes'}: ${l.text}`).join('\n')
+    try {
+      await this.client.sendText(ownerJid, `📞 ${who} called the Hermes bot (${Math.round(durationMs / 1000)}s).\n\n${lines || '(nothing was said)'}`.slice(0, 3500))
+      this.log('sent the owner a summary of this call')
+    } catch (err) {
+      this.log(`could not notify the owner: ${err.message}`)
+    }
   }
 }

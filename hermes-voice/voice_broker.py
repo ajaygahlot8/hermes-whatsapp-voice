@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import inspect
 import json
 import os
@@ -20,14 +21,46 @@ WHATSAPP_LANE_LINE = (
     "You are live on a WhatsApp voice call that the operator placed to the Hermes bot number; "
     "the operator hanging up ends the call."
 )
-AUTO_LANGUAGE_DIRECTIVE = (
-    "LANGUAGE AND VOICE: Reply in the language the caller is speaking (for example Hindi or English) "
-    "and switch when they switch. Sound like a native speaker of that language."
-)
-LANGUAGE = (os.environ.get("WHATSAPP_VOICE_LANGUAGE") or "en").strip().lower()
+LANGUAGE_NAMES = {
+    "hi": "Hindi (हिंदी), simple and respectful (use आप)",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "pt": "Portuguese",
+    "ar": "Arabic",
+    "bn": "Bengali",
+    "mr": "Marathi",
+    "gu": "Gujarati",
+    "ta": "Tamil",
+    "te": "Telugu",
+}
+DEFAULT_LANGUAGE = (os.environ.get("WHATSAPP_VOICE_LANGUAGE") or "en").strip().lower()
 
 _out_lock = threading.Lock()
 _base_persona = talk._codexlive_persona
+
+
+class _NoIdentity:
+    def identity_sections(self) -> dict:
+        return {}
+
+
+@contextlib.contextmanager
+def _without_identity(enabled: bool):
+    if not enabled:
+        yield
+        return
+    patches = [(talk.talk_host, "host", lambda: _NoIdentity()), (talk, "_bot_identity_sections", lambda profile: {})]
+    if hasattr(talk, "_host_identity_sections"):
+        patches.append((talk, "_host_identity_sections", lambda: {}))
+    saved = [(obj, attr, getattr(obj, attr)) for obj, attr, _ in patches]
+    try:
+        for obj, attr, value in patches:
+            setattr(obj, attr, value)
+        yield
+    finally:
+        for obj, attr, value in saved:
+            setattr(obj, attr, value)
 
 
 def _accepts(fn, name: str) -> bool:
@@ -37,10 +70,21 @@ def _accepts(fn, name: str) -> bool:
         return False
 
 
-def _language_kwargs(fn) -> dict:
+def _language_kwargs(fn, language: str) -> dict:
     if not _accepts(fn, "language"):
         return {}
-    return {"language": "es" if LANGUAGE == "es" else "en"}
+    return {"language": "es" if language == "es" else "en"}
+
+
+def _language_directive(language: str) -> str | None:
+    if language in ("", "en"):
+        return None
+    if language == "auto":
+        return ("LANGUAGE AND VOICE: Reply in the language the caller is speaking (for example Hindi or English) "
+                "and switch when they switch. Sound like a native speaker of that language.")
+    name = LANGUAGE_NAMES.get(language, language)
+    return (f"LANGUAGE AND VOICE: Speak {name} from your very first words, including greetings. Switch to another "
+            "language only if the caller asks for it. Sound like a native speaker.")
 
 
 def _send(obj: dict) -> None:
@@ -49,12 +93,15 @@ def _send(obj: dict) -> None:
         sys.stdout.flush()
 
 
-def _phone_persona(note: str):
+def _phone_persona(note: str, language: str):
+    directive = _language_directive(language)
+
     def build(profile, *args, **kwargs):
         text = _base_persona(profile, *args, **kwargs)
         text = text.replace(talk_identity.lane_line("dashboard"), WHATSAPP_LANE_LINE)
-        if LANGUAGE == "auto":
-            text = re.sub(r"LANGUAGE AND VOICE:.*?(?=\n\n|\Z)", AUTO_LANGUAGE_DIRECTIVE, text, count=1, flags=re.S)
+        if directive:
+            replaced = re.sub(r"LANGUAGE AND VOICE:.*?(?=\n\n|\Z)", lambda _: directive, text, count=1, flags=re.S)
+            text = replaced if replaced != text else f"{text}\n\n{directive}"
         return f"{text}\n\n{note}" if note else text
     return build
 
@@ -63,14 +110,16 @@ def _start(req: dict) -> dict:
     offer = str(req.get("offer") or "")
     if not offer:
         raise ValueError("missing SDP offer")
-    with talk._CL_LOCK:
-        talk._codexlive_persona = _phone_persona(str(req.get("note") or "").strip())
+    language = str(req.get("language") or DEFAULT_LANGUAGE).strip().lower()
+    minimal = str(req.get("persona") or "full") == "minimal"
+    with talk._CL_LOCK, _without_identity(minimal):
+        talk._codexlive_persona = _phone_persona(str(req.get("note") or "").strip(), language)
         try:
             result = talk._codexlive_start(
                 req.get("profile") or None,
                 str(req.get("voice") or "cove"),
                 offer,
-                **_language_kwargs(talk._codexlive_start),
+                **_language_kwargs(talk._codexlive_start, language),
             )
         finally:
             talk._codexlive_persona = _base_persona
@@ -81,7 +130,7 @@ def _start(req: dict) -> dict:
 def _warm(req: dict) -> dict:
     with talk._CL_LOCK:
         talk._cl_ensure()
-        thread_id = talk._cl_thread_ensure(**_language_kwargs(talk._cl_thread_ensure))
+        thread_id = talk._cl_thread_ensure(**_language_kwargs(talk._cl_thread_ensure, DEFAULT_LANGUAGE))
     return {"threadId": thread_id}
 
 

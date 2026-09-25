@@ -38,6 +38,7 @@ export type IncomingCallInfo = {
   from: string;
   fromDevice: string;
   callerPn?: string;
+  pushName?: string;
   isVideo: boolean;
   isGroup: boolean;
   offline: boolean;

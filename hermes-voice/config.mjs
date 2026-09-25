@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -12,6 +12,7 @@ const number = (value, fallback) => {
   const n = Number(value)
   return Number.isFinite(n) ? n : fallback
 }
+const digits = (value) => String(value || '').split('@')[0].replace(/\D/g, '')
 
 const MODEL_LABELS = { 'claude-opus-5-5': 'Claude Opus 5.5', 'claude-opus-5': 'Claude Opus 5', 'claude-sonnet-5': 'Claude Sonnet 5' }
 
@@ -21,17 +22,52 @@ export const parseAllowlist = (raw) => String(raw || '')
   .filter(Boolean)
   .map((entry) => {
     const [id, ...name] = entry.split(':')
-    const lid = id.endsWith('@lid')
-    return { id: lid ? id.split('@')[0].replace(/\D/g, '') : id.replace(/\D/g, ''), lid, name: name.join(':').trim() }
+    return { id: digits(id), lid: id.endsWith('@lid'), name: name.join(':').trim(), verified: true, tasks: true, language: '', note: '' }
   })
   .filter((entry) => entry.id)
 
+export const readCallersFile = (path) => {
+  if (!existsSync(path)) return []
+  const data = JSON.parse(readFileSync(path, 'utf8'))
+  const callers = Array.isArray(data) ? data : data.callers || []
+  return callers.flatMap((c) => {
+    const base = {
+      name: String(c.name || ''),
+      verified: !!c.verified,
+      tasks: c.tasks !== false,
+      language: String(c.language || '').toLowerCase(),
+      note: String(c.note || ''),
+    }
+    return [
+      c.number ? { ...base, id: digits(c.number), lid: false } : null,
+      c.lid ? { ...base, id: digits(c.lid), lid: true } : null,
+    ].filter((e) => e && e.id)
+  })
+}
+
+const callersFile = env.WHATSAPP_VOICE_CALLERS_FILE || join(hermesHome, 'whatsapp-voice-callers.json')
+let fileCallers = []
+let callersError = ''
+try {
+  fileCallers = readCallersFile(callersFile)
+} catch (err) {
+  callersError = `${callersFile}: ${err.message}`
+}
+
 const chatModel = env.WHATSAPP_VOICE_CHAT_MODEL || 'claude-opus-5-5'
+const envCallers = parseAllowlist(env.WHATSAPP_VOICE_ALLOWED)
+const owner = envCallers.find((c) => !c.lid)
 
 export const config = {
   hermesHome,
   authDir: env.WHATSAPP_CALLER_AUTH || join(hermesHome, 'platforms/whatsapp/caller-session'),
-  allowlist: parseAllowlist(env.WHATSAPP_VOICE_ALLOWED),
+  allowlist: [...envCallers, ...fileCallers],
+  ownerJid: env.WHATSAPP_VOICE_OWNER ? `${digits(env.WHATSAPP_VOICE_OWNER)}@s.whatsapp.net` : owner ? `${owner.id}@s.whatsapp.net` : '',
+  notifyOwner: env.WHATSAPP_VOICE_NOTIFY_OWNER !== '0',
+  callersFile,
+  callersError,
+  answerEveryone: (env.WHATSAPP_VOICE_ANSWER || 'allowlist').toLowerCase() === 'everyone',
+  unknownTasks: env.WHATSAPP_VOICE_UNKNOWN_TASKS === '1',
   voice: env.WHATSAPP_VOICE_VOICE || 'cove',
   language: (env.WHATSAPP_VOICE_LANGUAGE || 'en').toLowerCase(),
   profile: env.WHATSAPP_VOICE_PROFILE || '',
@@ -52,3 +88,5 @@ export const config = {
   workdir: join(hermesHome, 'workspace'),
   debug: env.WHATSAPP_VOICE_DEBUG === '1',
 }
+
+export const LANGUAGE_NAMES = { en: 'English', hi: 'Hindi', es: 'Spanish', auto: '' }

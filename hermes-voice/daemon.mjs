@@ -28,20 +28,25 @@ const state = {
   shuttingDown: false,
 }
 
-const callerName = (info) => {
+const callerProfile = (info) => {
   const lidUser = info.from.endsWith('@lid') ? info.from.split('@')[0] : ''
+  const number = info.callerPn || lidUser
   const match = config.allowlist.find((entry) => (entry.lid ? entry.id === lidUser : entry.id === info.callerPn))
-  return match ? (match.name || 'there') : null
+  if (match) {
+    return { known: true, verified: match.verified, tasks: match.tasks, name: match.name || info.pushName || 'there', number, language: match.language, note: match.note, pushName: info.pushName || '' }
+  }
+  if (!config.answerEveryone) return null
+  return { known: false, verified: false, tasks: config.unknownTasks, name: info.pushName || 'the caller', number, language: '', note: '', pushName: info.pushName || '' }
 }
 
 const screenIncomingCall = (info) => {
-  const name = callerName(info)
-  if (!name) {
-    log(`ignoring call from ${info.callerPn || info.from} (not in WHATSAPP_VOICE_ALLOWED)`)
+  const caller = callerProfile(info)
+  if (!caller) {
+    log(`ignoring call from ${info.callerPn || info.from} (not in the callers list)`)
     return false
   }
   if (state.session && state.session.active) {
-    log(`ignoring call from ${name}: another call is active`)
+    log(`ignoring call from ${caller.name}: another call is active`)
     return false
   }
   return true
@@ -66,7 +71,7 @@ client.on('incoming', (call) => {
     broker,
     client,
     log,
-    callerName: callerName(call.incoming),
+    caller: callerProfile(call.incoming),
   })
   state.session = session
   state.sessions.add(session)
@@ -135,7 +140,8 @@ const server = http.createServer(async (req, res) => {
         connected: state.connected,
         device: client.user?.id || null,
         uptimeS: Math.round((Date.now() - state.startedAt) / 1000),
-        allowlist: config.allowlist.map((e) => e.name || e.id),
+        answers: config.answerEveryone ? `everyone (strangers: ${config.unknownTasks ? 'tasks allowed' : 'conversation only'})` : 'known callers only',
+        knownCallers: [...new Set(config.allowlist.map((e) => `${e.name || e.id}${e.verified ? ' (verified)' : ''}`))],
         chatModel: `${config.chatProvider}/${config.chatModel}`,
         activeCall: client.activeCall ? { callId: client.activeCall.callId, direction: client.activeCall.direction, with: s?.name } : null,
         lastCall: state.lastCall,
@@ -180,8 +186,11 @@ process.on('SIGTERM', () => void shutdown(0))
 process.on('SIGINT', () => void shutdown(0))
 
 log(`starting WhatsApp voice daemon (device auth ${config.authDir})`)
-if (!config.allowlist.length) log('WARNING: WHATSAPP_VOICE_ALLOWED is empty, so no call will be answered')
-log(`answering: ${config.allowlist.map((e) => `${e.name || '?'} (${e.lid ? 'lid ' : ''}${e.id})`).join(', ') || 'nobody'}; chat model ${config.chatProvider}/${config.chatModel}; voice ${config.voice}; language ${config.language}`)
+if (config.callersError) log(`WARNING: callers file ignored: ${config.callersError}`)
+if (!config.allowlist.length && !config.answerEveryone) log('WARNING: no callers configured and WHATSAPP_VOICE_ANSWER is not "everyone", so no call will be answered')
+const describeCaller = (e) => `${e.name || '?'} (${e.lid ? 'lid ' : ''}${e.id}${e.verified ? ', verified' : ''}${e.tasks ? '' : ', no tasks'}${e.language ? `, ${e.language}` : ''})`
+log(`known callers: ${config.allowlist.map(describeCaller).join(', ') || 'none'}; everyone else: ${config.answerEveryone ? `answered, ${config.unknownTasks ? 'tasks allowed' : 'conversation only'}` : 'ignored'}`)
+log(`chat model ${config.chatProvider}/${config.chatModel}; voice ${config.voice}; language ${config.language}`)
 
 try {
   await client.connect()

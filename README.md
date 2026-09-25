@@ -89,20 +89,48 @@ kick each other off.
 
 ### Configure
 
-Settings are read from `~/.hermes/.env` (see [`.env.example`](.env.example)). The only required one
-is the allowlist:
+Settings are read from `~/.hermes/.env` (see [`.env.example`](.env.example)). Callers come in three
+tiers, identified by the caller ID WhatsApp verifies:
+
+| Tier | Where it's set | Voice knows your memory | Can run tasks | Personal info |
+|---|---|---|---|---|
+| **Verified** (you, household) | `WHATSAPP_VOICE_ALLOWED`, or `"verified": true` in the callers file | yes | yes | yes |
+| **Known** (family, friends) | callers file | no | yes (unless `"tasks": false`) | no |
+| **Stranger** | only with `WHATSAPP_VOICE_ANSWER=everyone` | no | no (unless `WHATSAPP_VOICE_UNKNOWN_TASKS=1`) | no |
 
 ```bash
-WHATSAPP_VOICE_ALLOWED=9198XXXXXXXX:Alex        # numbers (or <lid>@lid) that may call, with a name
+WHATSAPP_VOICE_ALLOWED=9198XXXXXXXX:Alex        # verified: numbers (or <lid>@lid) with a name
+WHATSAPP_VOICE_ANSWER=everyone                  # also pick up strangers (default: known callers only)
 ```
+
+Per-caller settings go in `~/.hermes/whatsapp-voice-callers.json`:
+
+```json
+{
+  "callers": [
+    { "name": "Sam", "number": "9198XXXXXXXX", "verified": true },
+    { "name": "Papa", "number": "9199XXXXXXXX", "language": "hi",
+      "note": "He is Alex's father. Talk with him in simple, respectful Hindi and be patient." }
+  ]
+}
+```
+
+`language` (`en`, `hi`, `es`, … or `auto`) sets the language the voice speaks from its first words.
+`note` tells the voice and the task chat who the caller is. After a stranger's call, the owner (the
+first `WHATSAPP_VOICE_ALLOWED` number) gets a WhatsApp text with the transcript.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `WHATSAPP_VOICE_ALLOWED` | *(empty: answers nobody)* | Comma list of `number[:Name]` or `<lid>@lid[:Name]` |
+| `WHATSAPP_VOICE_ALLOWED` | *(empty)* | Verified callers: comma list of `number[:Name]` or `<lid>@lid[:Name]` |
+| `WHATSAPP_VOICE_ANSWER` | `allowlist` | `everyone` also answers strangers (conversation only) |
+| `WHATSAPP_VOICE_UNKNOWN_TASKS` | `0` | `1` lets strangers run tasks too. **Not recommended**: tasks run with your agent's tools |
+| `WHATSAPP_VOICE_CALLERS_FILE` | `~/.hermes/whatsapp-voice-callers.json` | Per-caller name, tier, language and note |
+| `WHATSAPP_VOICE_OWNER` | first allowlisted number | Who gets the transcript of strangers' calls |
+| `WHATSAPP_VOICE_NOTIFY_OWNER` | `1` | `0` turns those transcripts off |
 | `WHATSAPP_VOICE_CHAT_MODEL` | `claude-opus-5-5` | Model for the per-call Hermes chat |
 | `WHATSAPP_VOICE_CHAT_PROVIDER` | `anthropic` | Provider for that chat |
 | `WHATSAPP_VOICE_VOICE` | `cove` | GPT-Live-1 voice: cove, juniper, maple, spruce, ember, vale, breeze, arbor, sol |
-| `WHATSAPP_VOICE_LANGUAGE` | `en` | `en`, `es`, or `auto` (answer in the caller's language) |
+| `WHATSAPP_VOICE_LANGUAGE` | `en` | Default language: `en`, `hi`, `es`, …, or `auto` (follow the caller) |
 | `WHATSAPP_VOICE_PROFILE` | *(host identity)* | Hermes profile whose `SOUL.md` the voice adopts |
 | `WHATSAPP_VOICE_ANSWER_DELAY_MS` | `1500` | Minimum ring time before answering |
 | `WHATSAPP_VOICE_TASK_WAIT_S` | `150` | How long the voice waits for a task before saying "still working" |
@@ -181,8 +209,11 @@ extended with **incoming calls**:
 
 ## Security notes
 
-- Only numbers in `WHATSAPP_VOICE_ALLOWED` are answered. The voice can hand tasks to your full
-  Hermes agent (tools, memory, shell), so keep the list short.
+- Tasks run in a local Hermes chat, and a Hermes chat started from the CLI trusts its user like the
+  owner. So only verified and known callers can delegate by default, and every task prompt states
+  who is really calling and that non-verified callers must not get personal information.
+- Only verified callers get a voice persona with your memory (`USER.md`, `MEMORY.md`, Mnemosyne).
+  Everyone else gets a persona without it, so the voice itself has nothing private to leak.
 - The per-call chat is told to ask before anything irreversible or outward-facing (send, post,
   delete, pay, merge), and to act on the most likely intent of a possibly mis-heard request.
 - The control API binds to `127.0.0.1` only and refuses requests with an `Origin` header or a
