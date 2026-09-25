@@ -1,0 +1,56 @@
+{
+  "name": "hermes-whatsapp-voice",
+  "version": "0.1.0",
+  "description": "Call your Hermes agent on WhatsApp: incoming calls are answered by GPT-Live-1 voice and real work is delegated to a Hermes chat.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "author": "Ajay Singh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ajaygahlot8/hermes-whatsapp-voice.git"
+  },
+  "main": "./dist/index.mjs",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.mts"
+    }
+  },
+  "bin": {
+    "hermes-call": "./bin/hermes-call.mjs",
+    "hermes-whatsapp-voice": "./hermes-voice/daemon.mjs"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.worker.json",
+    "fetch-wasm": "node scripts/fetch-wasm.mjs",
+    "fetch-wasm:browser": "node scripts/fetch-wasm-from-browser.mjs",
+    "start": "node hermes-voice/daemon.mjs",
+    "selftest": "node hermes-voice/selftest.mjs",
+    "example": "tsx examples/call.mts"
+  },
+  "dependencies": {
+    "@roamhq/wrtc": "^0.10.0",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "whatsapp",
+    "voice-call",
+    "voip",
+    "baileys",
+    "hermes-agent",
+    "gpt-live-1",
+    "realtime",
+    "webrtc",
+    "voice-agent"
+  ]
+}

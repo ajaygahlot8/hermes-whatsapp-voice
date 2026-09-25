@@ -1,0 +1,9 @@
+node_modules/
+dist/
+assets/wasm/
+*.log
+.env
+auth/
+caller-session/
+__pycache__/
+.DS_Store
